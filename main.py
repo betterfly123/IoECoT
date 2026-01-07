@@ -1,59 +1,65 @@
+# main.py
 import argparse
-from run_eic import *
-from run_erc import *
-from utils import *
-from local_model import *
+import os
 from sklearn.metrics import classification_report
 
+from utils import data_select, data_contrust, ERC_data_contrust
+from llm_clients import OpenAIChatClient, ChatGLMClient
+from runner import EmotionRunner, RunConfig
 
-def run_cot(data_name, data_path, emotion2label, emo_list, emo_prompt, method_type, model_name, default_emo):
-    preds = []
-    data, speaker, speaker_list, ground_truth = data_contrust(data_path, emotion2label, data_name, method_type, model_name)
-    if model_name == 'chatglm':
-        if method_type == 'direct':
-            preds = run_erc_direct_lm(data, ground_truth, emo_prompt, model_name, emo_list, default_emo)
-        else:
-            preds = run_erc_ioecot_lm(data, utterance, ground_truth, emo_prompt, model_name, emo_list, speaker, default_emo)
+
+def build_client(model_name: str, local_model_path: str = ""):
+    if model_name == "chatglm":
+        if not local_model_path:
+            raise ValueError("model_name=chatglm needs --local_model_path")
+        return ChatGLMClient(model_path=local_model_path)
+    return OpenAIChatClient(model=model_name)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, required=True) 
+    parser.add_argument("--local_model_path", type=str, default="")
+    parser.add_argument("--data_name", type=str, required=True)
+    parser.add_argument("--data_path", type=str, required=True) 
+    parser.add_argument("--task_type", type=str, required=True)  
+    parser.add_argument("--method_type", type=str, required=True)
+    parser.add_argument("--default_emo", type=int, required=True)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    datasetpath, emotion2label, emo_list, emo_prompt = data_select(args.data_name, args.task_type)
+
+    data_path = os.path.join(args.data_path, args.task_type, datasetpath)
+
+    client = build_client(args.model_name, args.local_model_path)
+
+    if args.task_type == "EIC":
+        dialogs, speakers, speaker_list, ground_truth = data_contrust(
+            data_path, emotion2label, args.data_name, args.method_type, args.model_name
+        )
+        utterances = None
     else:
-        if method_type == 'direct':
-            preds = run_direct(data, ground_truth, emo_prompt, model_name, emo_list, default_emo)
-        else:
-            preds = run_ioecot(data, ground_truth, emo_prompt, model_name, emo_list, speaker, default_emo)
-    print(classification_report(ground_truth, preds, digits=4))
+        dialogs, utterances, speakers, speaker_list, ground_truth = ERC_data_contrust(
+            data_path, emotion2label, args.data_name, args.method_type
+        )
 
-def run_ERC_cot(data_name, data_path, emotion2label, emo_list, emo_prompt, method_type, model_name, default_emo):
+    cfg = RunConfig(
+        task=args.task_type,
+        method=args.method_type,
+        emo_prompt=emo_prompt,
+        emo_list=emo_list,
+        default_emo=args.default_emo,
+        temperature=0.0,
+        max_tokens=None,
+        verbose=args.verbose,
+    )
 
-    data, utterance, speaker, speaker_list, ground_truth = ERC_data_contrust(data_path, emotion2label, data_name, method_type)
-    if model_name == 'chatglm':
-        if method_type == 'direct':
-            preds = run_erc_direct_lm(data, ground_truth, emo_prompt, model_name, emo_list, default_emo)
-       else:
-            preds = run_erc_ioecot_lm(data, utterance, ground_truth, emo_prompt, model_name, emo_list, speaker, default_emo)
-    else:
-        if method_type == 'direct':
-            preds = run_erc_direct(data, ground_truth, emo_prompt, model_name, emo_list, default_emo)
-       else:
-            preds = run_erc_ioecot(data, utterance, ground_truth, emo_prompt, model_name, emo_list, speaker, default_emo)
+    runner = EmotionRunner(client, cfg)
+    preds = runner.run(dialogs, speakers=speakers if args.method_type != "direct" else None, utterances=utterances)
+
     print(classification_report(ground_truth, preds, digits=4))
 
 
 if __name__ == "__main__":
-    # parse args
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default=None, type=str, required=True)
-    parser.add_argument('--data_name', default=None, type=str, required=True)
-    parser.add_argument('--data_path', default=None, type=str, required=True)
-    parser.add_argument('--task_type', default=None, type=str, required=True)
-    parser.add_argument('--method_type', default=None, type=str, required=True)
-    parser.add_argument('--default_emo', default=None, type=int, required=True)
-    args = parser.parse_args()
-
-    datasetpath, emotion2label, emo_list, emo_prompt = data_select(args.data_name, args.task_type)
-    data_path = args.data_path + args.task_type + '/' + datasetpath
-    if args.task_type == 'EIC':
-        run_cot(args.data_name, data_path, emotion2label, emo_list, emo_prompt, args.method_type, args.model_name,
-                args.default_emo)
-    else:
-        run_ERC_cot(args.data_name, data_path, emotion2label, emo_list, emo_prompt, args.method_type, args.model_name,
-                args.default_emo)
-
+    main()
